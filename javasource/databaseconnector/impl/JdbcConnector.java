@@ -1,10 +1,13 @@
 package databaseconnector.impl;
 
 import java.io.ByteArrayInputStream;
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.BiConsumer;
@@ -78,11 +81,14 @@ public class JdbcConnector {
     logNode.trace(String.format("executeQuery: %s, %s, %s", jdbcUrl, userName, sql));
 
     try (Connection connection = connectionManager.getConnection(jdbcUrl, userName, password);
-        PreparedStatement preparedStatement = connection.prepareStatement(sql);
-        ResultSet resultSet = preparedStatement.executeQuery()) {
-      ResultSetReader resultSetReader = new ResultSetReader(resultSet, metaObject);
-
-      return resultSetReader.readAll().stream();
+        PreparedStatement preparedStatement = connection.prepareStatement(sql);) {
+    	addParameters(preparedStatement);
+    	try (ResultSet resultSet = preparedStatement.executeQuery()) {
+    		ResultSetReader resultSetReader = new ResultSetReader(resultSet, metaObject);
+		      reset();
+		
+		      return resultSetReader.readAll().stream();
+    	}
     }
   }
 
@@ -91,7 +97,58 @@ public class JdbcConnector {
 
     try (Connection connection = connectionManager.getConnection(jdbcUrl, userName, password);
         PreparedStatement preparedStatement = connection.prepareStatement(sql)) {
-      return preparedStatement.executeUpdate();
+    	addParameters(preparedStatement);
+      long result = preparedStatement.executeUpdate();
+      reset();
+      return result;
     }
   }
+  
+  // Support for parameters
+  static ThreadLocal<Map<Integer, Object>> nextParameters = new ThreadLocal<Map<Integer, Object>>();
+  
+  private void addParameters(PreparedStatement preparedStatement) throws SQLException {
+	  if (nextParameters.get() != null && !nextParameters.get().isEmpty()) {
+		  int index = 1;
+		  while(nextParameters.get().containsKey(index)) {
+			  Object value = nextParameters.get().get(index);
+			  if (value == null) {
+				  preparedStatement.setString(index, null);
+			  } else if (value instanceof String) {
+				  preparedStatement.setString(index, (String) value);
+			  } else if (value instanceof Boolean) {
+				  preparedStatement.setBoolean(index,  (Boolean) value);
+			  } else if (value instanceof Date) {
+				  preparedStatement.setDate(index, new java.sql.Date(((Date)value).getTime())); 
+			  } else if (value instanceof Float) {
+				  preparedStatement.setFloat(index, (Float) value);
+			  } else if (value instanceof BigDecimal) {
+				  preparedStatement.setBigDecimal(index, (BigDecimal) value);
+			  } else if (value instanceof Double) {
+				  preparedStatement.setDouble(index, (Double) value);
+			  } else if (value instanceof Long) {
+				  preparedStatement.setLong(index, (Long) value);
+			  } else {
+				  logNode.error("Unknown type: " + value.toString());
+			  }
+			  
+			  index++;
+		  }
+	  }
+  }
+  
+  public static Map<Integer, Object> getNextParameters() {
+		if (nextParameters.get() == null) {
+			nextParameters.set(new HashMap<Integer, Object>());
+		}
+		return nextParameters.get();
+	}
+	
+	public static void reset() {
+		nextParameters = new ThreadLocal<Map<Integer, Object>>();
+	}
+	
+	public static void addParameter(Integer index, Object value) {
+		getNextParameters().put(index, value);
+	}
 }
